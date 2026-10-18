@@ -1,14 +1,26 @@
 import asyncio
 import logging
+import signal
+import sys
 
+import aiohttp
 from aiohttp import web
 from pyrogram import Client, filters
 
 from bot import flow
 from bot.config import Config
 from bot.keyboards import library_keyboard, start_keyboard
+from bot.logger import GroupLogHandler, gl
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# Everything goes to stdout so Render's live log shows it immediately.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
+logging.getLogger("aiohttp.access").setLevel(logging.WARNING)  # hide health-check spam
+logging.getLogger().addHandler(GroupLogHandler(gl))            # errors -> logger group
 # Pyrogram/Telethon can be chatty; never run at DEBUG in production (QR URLs, tokens).
 log = logging.getLogger("smart-session-bot")
 
@@ -35,11 +47,44 @@ web_app.router.add_get("/health", health)
 
 
 async def start_web():
-    runner = web.AppRunner(web_app)
+    runner = web.AppRunner(web_app, access_log=None)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", Config.PORT).start()
     log.info("Health server listening on port %s", Config.PORT)
     return runner
+
+
+# ------------------------------------------------------------ startup checks
+async def ensure_no_webhook():
+    """A webhook on this token can block MTProto updates. Check and (optionally) remove it."""
+    base = f"https://api.telegram.org/bot{Config.BOT_TOKEN}"  # never log this URL
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"{base}/getWebhookInfo") as resp:
+                info = (await resp.json()).get("result") or {}
+            pending = info.get("pending_update_count", 0)
+            if not info.get("url"):
+                log.info("No webhook set (pending Bot API updates: %s)", pending)
+                return f"none ✅ (pending {pending})"
+            log.warning(
+                "A webhook is set for this bot token. It can stop updates from reaching "
+                "this bot (/start gets no reply). last_error=%s",
+                info.get("last_error_message"),
+            )
+            if not Config.AUTO_DELETE_WEBHOOK:
+                return "SET ⚠️ (AUTO_DELETE_WEBHOOK=false)"
+            async with session.post(f"{base}/deleteWebhook") as resp:
+                ok = bool((await resp.json()).get("ok"))
+            log.warning("Webhook removal %s", "succeeded" if ok else "FAILED")
+            return "was set → removed ✅" if ok else "set, removal FAILED ⚠️"
+    except Exception as exc:
+        log.warning("Webhook check failed (%s)", type(exc).__name__)
+        return "check failed"
+
+
+def _loop_exception_handler(_loop, context):
+    log.error("Unhandled asyncio error: %s", context.get("message", ""), exc_info=context.get("exception"))
 
 
 # ------------------------------------------------------------------- helpers
@@ -57,6 +102,23 @@ def welcome_text(name):
         "🔐 **Security:** A session string can grant access to your account. Never share it "
         "with anyone, and revoke the session in Telegram Settings → Devices if exposed."
     )
+
+
+# ------------------------------------------------- incoming-update diagnostics
+# group=-100 runs before every other handler and never stops propagation. It logs
+# only the kind of update (never message text, so passwords can't leak).
+@app.on_message(group=-100)
+async def log_incoming_message(_, message):
+    user = message.from_user
+    text = message.text or ""
+    kind = text.split()[0][:32] if text.startswith("/") else ("text" if text else "other")
+    chat_type = getattr(getattr(message.chat, "type", None), "name", "?")
+    log.info("Incoming message: chat=%s user=%s kind=%s", chat_type, user.id if user else "?", kind)
+
+
+@app.on_callback_query(group=-100)
+async def log_incoming_callback(_, query):
+    log.info("Incoming callback: data=%s user=%s", str(query.data)[:40], query.from_user.id if query.from_user else "?")
 
 
 # ------------------------------------------------------------------ handlers
@@ -176,12 +238,42 @@ async def cancel_login(_, query):
 
 # ---------------------------------------------------------------------- main
 async def main():
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(_loop_exception_handler)
+
+    # Render sends SIGTERM on redeploy: handle it so the "stopped" report can go out.
+    stop = asyncio.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except (NotImplementedError, RuntimeError):
+            pass
+
     runner = await start_web()
     try:
         await app.start()
-        log.info("Smart String Session Generator started")
-        await asyncio.Event().wait()
+        me = await app.get_me()
+        gl.attach(app, loop)
+        log.info("Bot started as @%s (id %s)", me.username, me.id)
+
+        webhook = await ensure_no_webhook()
+        await gl.report_start(
+            me,
+            {
+                "🌐 Webhook": webhook,
+                "🔐 2FA": "enabled" if Config.ENABLE_2FA else "disabled",
+                "🎨 Button styles": "on" if Config.BUTTON_STYLES else "off",
+                "📡 Health port": Config.PORT,
+            },
+        )
+        log.info("Smart String Session Generator is ready, waiting for updates")
+        await stop.wait()
+        log.info("Shutdown signal received")
     finally:
+        try:
+            await gl.report_stop()
+        except Exception:
+            pass
         await flow.shutdown()
         try:
             await app.stop()
@@ -191,4 +283,11 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        log.critical("Fatal error, bot stopped", exc_info=True)
+        sys.exit(1)
+
