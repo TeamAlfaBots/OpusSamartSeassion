@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: smart-string-session-bot
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: ENABLE_2FA
+        value: "false"
+      - key: START_IMG_URL
+        value: ""
+      - key: SUPPORT_URL
+        value: https://t.me/Alfabots_support
+      - key: UPDATE_URL
+        value: https://t.me/Alfabots_update
+      - key: DEVELOPER_URL
+        value: https://t.me/Uffsexyboi
+      - key: OWNER_URL
+        value: https://t.me/Seductive_caffine
