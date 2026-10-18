@@ -6,21 +6,53 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _int(name, default):
+# Problems found while reading env vars; main.py prints them at startup so a bad
+# value is never silently ignored.
+NOTES = []
+
+
+def _clean(raw):
+    """Strip spaces/quotes, and tolerate a pasted 'NAME=value' as the value."""
+    value = raw.strip().strip("\"'").strip()
+    if "=" in value:
+        value = value.split("=")[-1].strip().strip("\"'").strip()
+    return value.replace(" ", "")
+
+
+def _first_env(names):
+    for name in names:
+        raw = os.getenv(name)
+        if raw is not None and raw.strip():
+            return name, raw
+    return None, None
+
+
+def _int(names, default):
+    """Read an int from one env var (or the first set of several alias names)."""
+    if isinstance(names, str):
+        names = (names,)
+    name, raw = _first_env(names)
+    if raw is None:
+        return int(default)
     try:
-        return int(os.getenv(name, str(default)))
+        return int(_clean(raw))
     except ValueError:
+        NOTES.append(f"{name} is set but is not a number, ignoring it (using {default})")
         return int(default)
 
 
 def _bool(name, default="false"):
-    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv(name, default).strip().strip("\"'").lower() in {"1", "true", "yes", "on"}
+
+
+def _text(name, default=""):
+    return os.getenv(name, default).strip().strip("\"'").strip()
 
 
 class Config:
     API_ID = _int("API_ID", 0)
-    API_HASH = os.getenv("API_HASH", "")
-    BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+    API_HASH = _text("API_HASH")
+    BOT_TOKEN = _text("BOT_TOKEN")
     PORT = _int("PORT", 8080)
 
     START_IMG_URL = os.getenv("START_IMG_URL", "")
@@ -39,7 +71,7 @@ class Config:
 
     # Logger group/channel: the bot reports start/stop and errors there.
     # Add the bot to that chat first (admin needed for channels). e.g. -1001234567890
-    LOG_GROUP_ID = _int("-1002984488000", 0)
+    LOG_GROUP_ID = _int(("LOG_GROUP_ID", "LOGGER_ID", "LOG_CHANNEL_ID", "LOGGER_GROUP_ID"), 0)
 
     # A webhook set on this bot token can stop MTProto updates (/start gets no
     # reply). If true, the bot removes it at startup.
@@ -50,6 +82,17 @@ class Config:
     PASSWORD_TIMEOUT = _int("PASSWORD_TIMEOUT", 120)
     MAX_ATTEMPTS = _int("MAX_ATTEMPTS", 5)               # per user ...
     ATTEMPT_WINDOW = _int("ATTEMPT_WINDOW", 600)         # ... per this many sec
+
+    @classmethod
+    def problems(cls):
+        """Human-readable config warnings (printed once at startup)."""
+        notes = list(NOTES)
+        if cls.LOG_GROUP_ID > 0:
+            notes.append(
+                "LOG_GROUP_ID is positive; groups/channels use a negative id "
+                "like -1001234567890 (positive ids are users)"
+            )
+        return notes
 
     @classmethod
     def validate(cls):
