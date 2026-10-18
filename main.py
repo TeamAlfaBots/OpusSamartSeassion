@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import os
 import signal
 import sys
+from collections import Counter
 
 import aiohttp
 from aiohttp import web
@@ -55,32 +57,73 @@ async def start_web():
 
 
 # ------------------------------------------------------------ startup checks
-async def ensure_no_webhook():
-    """A webhook on this token can block MTProto updates. Check and (optionally) remove it."""
+def _update_kind(update):
+    """Summarise a Bot API update WITHOUT its text (e.g. 'private:/start')."""
+    msg = update.get("message") or update.get("edited_message")
+    if msg:
+        text = msg.get("text") or ""
+        kind = text.split()[0][:32] if text.startswith("/") else ("text" if text else "other")
+        return f"{(msg.get('chat') or {}).get('type', '?')}:{kind}"
+    for key in update:
+        if key != "update_id":
+            return key
+    return "other"
+
+
+async def bot_api_checks():
+    """Returns (webhook_status, queue_status) for the start report.
+
+    * A webhook on this token can stop MTProto updates -> check and optionally remove it.
+    * getUpdates (read-only, no offset) shows what Telegram has queued for this bot, which
+      tells us whether people's /start messages are reaching the bot at all.
+    """
     base = f"https://api.telegram.org/bot{Config.BOT_TOKEN}"  # never log this URL
+    webhook, queue = "check failed", "n/a"
     try:
         timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(f"{base}/getWebhookInfo") as resp:
                 info = (await resp.json()).get("result") or {}
-            pending = info.get("pending_update_count", 0)
             if not info.get("url"):
-                log.info("No webhook set (pending Bot API updates: %s)", pending)
-                return f"none ✅ (pending {pending})"
-            log.warning(
-                "A webhook is set for this bot token. It can stop updates from reaching "
-                "this bot (/start gets no reply). last_error=%s",
-                info.get("last_error_message"),
-            )
-            if not Config.AUTO_DELETE_WEBHOOK:
-                return "SET ⚠️ (AUTO_DELETE_WEBHOOK=false)"
-            async with session.post(f"{base}/deleteWebhook") as resp:
-                ok = bool((await resp.json()).get("ok"))
-            log.warning("Webhook removal %s", "succeeded" if ok else "FAILED")
-            return "was set → removed ✅" if ok else "set, removal FAILED ⚠️"
+                webhook = "none ✅"
+            else:
+                log.warning(
+                    "A webhook is set for this bot token. It can stop updates from reaching "
+                    "this bot (/start gets no reply). last_error=%s",
+                    info.get("last_error_message"),
+                )
+                if not Config.AUTO_DELETE_WEBHOOK:
+                    webhook = "SET ⚠️ (AUTO_DELETE_WEBHOOK=false)"
+                else:
+                    async with session.post(f"{base}/deleteWebhook") as resp:
+                        ok = bool((await resp.json()).get("ok"))
+                    log.warning("Webhook removal %s", "succeeded" if ok else "FAILED")
+                    webhook = "was set → removed ✅" if ok else "set, removal FAILED ⚠️"
+
+            async with session.get(f"{base}/getUpdates", params={"limit": 20, "timeout": 0}) as resp:
+                data = await resp.json()
+            if data.get("ok"):
+                kinds = Counter(_update_kind(u) for u in data.get("result", []))
+                queue = ", ".join(f"{k} x{v}" for k, v in kinds.items()) or "empty"
+            else:
+                queue = f"unavailable ({str(data.get('description'))[:60]})"
     except Exception as exc:
-        log.warning("Webhook check failed (%s)", type(exc).__name__)
-        return "check failed"
+        log.warning("Bot API check failed (%s)", type(exc).__name__)
+    log.info("Webhook: %s | Telegram-side queue: %s", webhook, queue)
+    return webhook, queue
+
+
+def log_config_summary():
+    """Print what the bot actually read from the environment (names/ids only, no secrets)."""
+    for note in Config.problems():
+        log.warning("CONFIG: %s", note)
+    log.info(
+        "Config: LOG_GROUP_ID=%s | 2FA=%s | button_styles=%s | env names containing 'LOG': %s",
+        Config.LOG_GROUP_ID or "not set",
+        Config.ENABLE_2FA,
+        Config.BUTTON_STYLES,
+        sorted(k for k in os.environ if "LOG" in k.upper()) or "none",
+    )
 
 
 def _loop_exception_handler(_loop, context):
@@ -249,6 +292,7 @@ async def main():
         except (NotImplementedError, RuntimeError):
             pass
 
+    log_config_summary()
     runner = await start_web()
     try:
         await app.start()
@@ -256,11 +300,12 @@ async def main():
         gl.attach(app, loop)
         log.info("Bot started as @%s (id %s)", me.username, me.id)
 
-        webhook = await ensure_no_webhook()
+        webhook, queue = await bot_api_checks()
         await gl.report_start(
             me,
             {
                 "🌐 Webhook": webhook,
+                "📥 Telegram queue": queue,
                 "🔐 2FA": "enabled" if Config.ENABLE_2FA else "disabled",
                 "🎨 Button styles": "on" if Config.BUTTON_STYLES else "off",
                 "📡 Health port": Config.PORT,
@@ -290,4 +335,4 @@ if __name__ == "__main__":
     except Exception:
         log.critical("Fatal error, bot stopped", exc_info=True)
         sys.exit(1)
-
+        
