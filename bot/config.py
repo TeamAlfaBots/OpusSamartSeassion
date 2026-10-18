@@ -23,7 +23,7 @@ class Config:
     BOT_TOKEN = os.getenv("BOT_TOKEN", "")
     PORT = _int("PORT", 8080)
 
-    START_IMG_URL = os.getenv("START_IMG_URL", "")
+    START_IMG_URL = os.getenv("https://files.catbox.moe/eqh9dn.png", "")
     SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/Alfabots_support")
     UPDATE_URL = os.getenv("UPDATE_URL", "https://t.me/Alfabots_update")
     DEVELOPER_URL = os.getenv("DEVELOPER_URL", "https://t.me/Uffsexyboi")
