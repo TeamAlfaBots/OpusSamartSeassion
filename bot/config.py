@@ -33,6 +33,10 @@ class Config:
     # chat, so it is OFF unless the owner explicitly enables it.
     ENABLE_2FA = _bool("ENABLE_2FA", "false")
 
+    # Bot API 9.4 coloured buttons (blue/green/red). Needs a Pyrogram fork that
+    # supports button styles; otherwise buttons silently stay plain.
+    BUTTON_STYLES = _bool("BUTTON_STYLES", "true")
+
     QR_TOTAL_TIMEOUT = _int("QR_TOTAL_TIMEOUT", 180)    # whole login attempt (sec)
     QR_REFRESH_SECONDS = _int("QR_REFRESH_SECONDS", 25)  # QR tokens live ~30s
     PASSWORD_TIMEOUT = _int("PASSWORD_TIMEOUT", 120)
@@ -52,3 +56,4 @@ class Config:
         ]
         if missing:
             raise RuntimeError("Set these environment variables: " + ", ".join(missing))
+            
