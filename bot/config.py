@@ -23,7 +23,7 @@ class Config:
     BOT_TOKEN = os.getenv("BOT_TOKEN", "")
     PORT = _int("PORT", 8080)
 
-    START_IMG_URL = os.getenv("https://files.catbox.moe/eqh9dn.png", "")
+    START_IMG_URL = os.getenv("START_IMG_URL", "")
     SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/Alfabots_support")
     UPDATE_URL = os.getenv("UPDATE_URL", "https://t.me/Alfabots_update")
     DEVELOPER_URL = os.getenv("DEVELOPER_URL", "https://t.me/Uffsexyboi")
@@ -36,6 +36,14 @@ class Config:
     # Bot API 9.4 coloured buttons (blue/green/red). Needs a Pyrogram fork that
     # supports button styles; otherwise buttons silently stay plain.
     BUTTON_STYLES = _bool("BUTTON_STYLES", "true")
+
+    # Logger group/channel: the bot reports start/stop and errors there.
+    # Add the bot to that chat first (admin needed for channels). e.g. -1001234567890
+    LOG_GROUP_ID = _int("-1002984488000", 0)
+
+    # A webhook set on this bot token can stop MTProto updates (/start gets no
+    # reply). If true, the bot removes it at startup.
+    AUTO_DELETE_WEBHOOK = _bool("AUTO_DELETE_WEBHOOK", "true")
 
     QR_TOTAL_TIMEOUT = _int("QR_TOTAL_TIMEOUT", 180)    # whole login attempt (sec)
     QR_REFRESH_SECONDS = _int("QR_REFRESH_SECONDS", 25)  # QR tokens live ~30s
