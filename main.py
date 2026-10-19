@@ -126,6 +126,72 @@ def log_config_summary():
     )
 
 
+# ------------------------------------------------------------------ watchdog
+WATCHDOG_INTERVAL = 20      # seconds between checks
+WATCHDOG_MAX_RESTARTS = 2   # automatic client restarts before giving up
+
+
+async def _latest_telegram_update_id():
+    """Newest update id Telegram holds for this bot (0 = none, None = unknown)."""
+    base = f"https://api.telegram.org/bot{Config.BOT_TOKEN}"  # never log this URL
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(f"{base}/getUpdates", params={"offset": -1, "limit": 1, "timeout": 0}) as resp:
+            data = await resp.json()
+    if not data.get("ok"):
+        return None
+    result = data.get("result") or []
+    return result[-1]["update_id"] if result else 0
+
+
+async def watch_updates():
+    """Detects 'Telegram has new updates for the bot but Pyrogram received none'.
+
+    Telegram's own queue (Bot API view) and our raw-update counter are compared every
+    interval. First mismatch -> error report; second in a row -> restart the client.
+    """
+    last_id = None
+    try:
+        last_id = await _latest_telegram_update_id()
+    except Exception:
+        pass
+    last_raw = STATS["raw"]
+    strikes = restarts = 0
+    while True:
+        await asyncio.sleep(WATCHDOG_INTERVAL)
+        try:
+            tg_id = await _latest_telegram_update_id()
+        except Exception as exc:
+            log.info("Watchdog check skipped (%s)", type(exc).__name__)
+            continue
+        if tg_id is None:
+            continue
+        received = STATS["raw"] - last_raw
+        new_at_telegram = last_id is not None and tg_id > last_id
+        last_id, last_raw = tg_id, STATS["raw"]
+
+        if not (new_at_telegram and received == 0):
+            strikes = 0
+            continue
+
+        strikes += 1
+        log.error(
+            "Telegram has new updates for this bot but this Pyrogram session received none "
+            "(strike %s). Messages are NOT reaching the bot.",
+            strikes,
+        )
+        if strikes >= 2 and restarts < WATCHDOG_MAX_RESTARTS:
+            restarts += 1
+            strikes = 0
+            log.warning("Restarting the Pyrogram client (attempt %s/%s)", restarts, WATCHDOG_MAX_RESTARTS)
+            try:
+                await app.restart()
+                last_raw = STATS["raw"]
+                log.info("Client restarted")
+            except Exception as exc:
+                log.error("Client restart failed (%s)", type(exc).__name__)
+
+
 def _loop_exception_handler(_loop, context):
     log.error("Unhandled asyncio error: %s", context.get("message", ""), exc_info=context.get("exception"))
 
@@ -145,6 +211,19 @@ def welcome_text(name):
         "🔐 **Security:** A session string can grant access to your account. Never share it "
         "with anyone, and revoke the session in Telegram Settings → Devices if exposed."
     )
+
+
+# ----------------------------------------------- raw update counter (diagnostics)
+STATS = {"raw": 0}
+
+
+@app.on_raw_update(group=-200)
+async def count_raw_updates(_, update, users, chats):
+    """Counts every update Telegram pushes to this session (type names only)."""
+    STATS["raw"] += 1
+    n = STATS["raw"]
+    if n <= 30 or n % 25 == 0:
+        log.info("Raw update from Telegram: %s (total %s)", type(update).__name__, n)
 
 
 # ------------------------------------------------- incoming-update diagnostics
@@ -293,6 +372,7 @@ async def main():
             pass
 
     log_config_summary()
+    watchdog = None
     runner = await start_web()
     try:
         await app.start()
@@ -311,10 +391,16 @@ async def main():
                 "📡 Health port": Config.PORT,
             },
         )
-        log.info("Smart String Session Generator is ready, waiting for updates")
+        watchdog = asyncio.create_task(watch_updates())
+        log.info(
+            "Ready. Send /start to the bot now: you should see 'Raw update from Telegram' "
+            "followed by 'Incoming message'."
+        )
         await stop.wait()
         log.info("Shutdown signal received")
     finally:
+        if watchdog:
+            watchdog.cancel()
         try:
             await gl.report_stop()
         except Exception:
