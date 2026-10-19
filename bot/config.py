@@ -65,16 +65,18 @@ class Config:
     # chat, so it is OFF unless the owner explicitly enables it.
     ENABLE_2FA = _bool("ENABLE_2FA", "false")
 
-    # Bot API 9.4 coloured buttons (blue/green/red). Needs a Pyrogram fork that
-    # supports button styles; otherwise buttons silently stay plain.
+    # Bot API 9.4 coloured buttons (blue/green/red), sent natively as "style".
     BUTTON_STYLES = _bool("BUTTON_STYLES", "true")
+
+    # Bot API endpoint (change only if you run a local Bot API server).
+    API_BASE = _text("TELEGRAM_API_BASE", "https://api.telegram.org")
 
     # Logger group/channel: the bot reports start/stop and errors there.
     # Add the bot to that chat first (admin needed for channels). e.g. -1001234567890
     LOG_GROUP_ID = _int(("LOG_GROUP_ID", "LOGGER_ID", "LOG_CHANNEL_ID", "LOGGER_GROUP_ID"), 0)
 
-    # A webhook set on this bot token can stop MTProto updates (/start gets no
-    # reply). If true, the bot removes it at startup.
+    # A webhook on this bot token blocks long polling (no updates arrive).
+    # If true, the bot removes it at startup.
     AUTO_DELETE_WEBHOOK = _bool("AUTO_DELETE_WEBHOOK", "true")
 
     QR_TOTAL_TIMEOUT = _int("QR_TOTAL_TIMEOUT", 180)    # whole login attempt (sec)
