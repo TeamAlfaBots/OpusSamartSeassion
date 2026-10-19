@@ -63,7 +63,7 @@ class Config:
 
     # Two-step verification: the bot has to receive the user's cloud password in
     # chat, so it is OFF unless the owner explicitly enables it.
-    ENABLE_2FA = _bool("ENABLE_2FA", "false")
+    ENABLE_2FA = _bool("ENABLE_2FA", "true")
 
     # Bot API 9.4 coloured buttons (blue/green/red), sent natively as "style".
     BUTTON_STYLES = _bool("BUTTON_STYLES", "true")
