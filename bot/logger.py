@@ -3,7 +3,6 @@
 Never sends session strings, QR links, passwords or bot tokens: every outgoing
 report goes through redact() first.
 """
-import asyncio
 import html
 import logging
 import platform
@@ -11,8 +10,6 @@ import re
 import time
 from collections import deque
 from datetime import datetime, timezone
-
-from pyrogram.enums import ParseMode
 
 from .config import Config
 
@@ -36,7 +33,7 @@ class GroupLogger:
     DEDUPE_SECONDS = 60      # identical error is sent once per this window
 
     def __init__(self):
-        self.client = None
+        self.api = None
         self.loop = None
         self._tasks = set()
         self._stamps = deque()
@@ -45,30 +42,24 @@ class GroupLogger:
 
     @property
     def enabled(self):
-        return bool(Config.LOG_GROUP_ID) and self.client is not None
+        return bool(Config.LOG_GROUP_ID) and self.api is not None
 
-    def attach(self, client, loop):
-        self.client, self.loop = client, loop
+    def attach(self, api, loop):
+        self.api, self.loop = api, loop
 
     async def send(self, html_text):
         if not self.enabled:
             return False
         try:
-            await self.client.send_message(
-                Config.LOG_GROUP_ID,
-                redact(html_text)[:4000],
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-            )
+            await self.api.send_message(Config.LOG_GROUP_ID, redact(html_text)[:4000])
             return True
         except Exception as exc:
             if not self._warned:  # warn once, not on every error
                 self._warned = True
                 log.warning(
-                    "Could not send to LOG_GROUP_ID (%s: %s). Add the bot to that chat "
+                    "Could not send to LOG_GROUP_ID (%s). Add the bot to that chat "
                     "(admin for channels) and check the id (e.g. -100xxxxxxxxxx).",
-                    type(exc).__name__,
-                    str(exc)[:120],
+                    str(exc)[:160],
                 )
             return False
 
@@ -78,12 +69,6 @@ class GroupLogger:
             log.info("LOG_GROUP_ID not set: logger group reporting is disabled")
             return False
         try:
-            import pyrogram
-
-            pyro = pyrogram.__version__
-        except Exception:
-            pyro = "?"
-        try:
             import telethon
 
             tele = telethon.__version__
@@ -92,9 +77,9 @@ class GroupLogger:
         lines = [
             "✅ <b>Smart String Session Bot started</b>",
             "",
-            f"🤖 Bot: @{html.escape(me.username or '?')} (<code>{me.id}</code>)",
+            f"🤖 Bot: @{html.escape(str(me.get('username') or '?'))} (<code>{me.get('id')}</code>)",
             f"🕒 {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC",
-            f"🐍 Python {platform.python_version()} · Pyrogram {html.escape(str(pyro))} · Telethon {html.escape(str(tele))}",
+            f"🐍 Python {platform.python_version()} · Telethon {html.escape(str(tele))} · Bot API polling",
         ]
         lines += [f"{html.escape(k)}: {html.escape(str(v))}" for k, v in info.items()]
         ok = await self.send("\n".join(lines))
@@ -167,4 +152,4 @@ class GroupLogHandler(logging.Handler):
             self.gl.report_record(record, self.format(record))
         except Exception:
             pass
-          
+            
